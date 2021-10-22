@@ -93,3 +93,12 @@ If you execute build_original_no_overload.py, and change the statement "if True:
 Note that in site-packages/vpython/vpython_libraries it is glowcomm.html that is used by launchers such as idle or spyder; glowcomm.js is used with Jupyter notebook (and a modified version is used in Jupyterlab).
 
 Placing console.log(....) statements in the GlowScript code or in the JavaScript section of glowcomm.html can be useful in debugging. You may also need to put debugging statements into site-packages/vpython/vpython.py.
+
+## [VPhysics](https://tcjd71.wixsite.com/vpython) 
+
+This repos is for testing your Vpython code without setting any environment.
+
+Here shows some examples how we use Vpython to simulate the real physical problems!
+
+- VP01 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/ttt50966/vpython-jupyter_VPhysics/master?filepath=VPhysics/VP1_Free_Fall.ipynb)
+
