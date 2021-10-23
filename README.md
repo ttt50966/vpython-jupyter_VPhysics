@@ -100,5 +100,5 @@ This repos is for testing your Vpython code without setting any environment.
 
 Here shows some examples how we use Vpython to simulate the real physical problems!
 
-- VP01 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/ttt50966/vpython-jupyter_VPhysics/master?filepath=VPhysics/VP1_Free_Fall.ipynb)
-
+- VP01 Free Fall [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/ttt50966/vpython-jupyter_VPhysics/master?filepath=VPhysics/VP1_Free_Fall.ipynb)
+- VP02 SHM, Collision, Pendulum, and Newton Cradle [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/ttt50966/vpython-jupyter_VPhysics/master?filepath=VPhysics/VP2_SHM_Collision_Pendulum_and_Newton%20Cradle.ipynb)
