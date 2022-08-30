@@ -15,10 +15,21 @@ from . import __version__, __gs_version__
 from ._notebook_helpers import _isnotebook
 from ._vector_import_helper import (vector, mag, norm, cross, dot, adjust_up,
                                     adjust_axis, object_rotate)
+                                    
+
+def Exit():
+    # no infinite loop here so build processs can finish.
+    # print("in atexit")
+    pass
+
+import atexit
+
+if platform.system() == 'Windows':
+    atexit.register(Exit)
 
 # List of names that will be imported from this file with import *
 __all__ = ['Camera', 'GlowWidget', 'version', 'GSversion', 'Mouse', 'arrow', 'attach_arrow',
-           'attach_trail', 'baseObj', 'box', 'bumpmaps', 'button',
+           'attach_light', 'attach_trail', 'baseObj', 'box', 'bumpmaps', 'button',
            'canvas', 'checkbox', 'clock', 'color', 'combin', 'compound', 'cone', 'controls',
            'curve', 'curveMethods', 'cylinder', 'distant_light', 'ellipsoid',
            'event_return', 'extrusion', 'faces', 'frame', 'gcurve', 'gdots',
@@ -28,13 +39,8 @@ __all__ = ['Camera', 'GlowWidget', 'version', 'GSversion', 'Mouse', 'arrow', 'at
            'standardAttributes', 'text', 'textures', 'triangle', 'vertex',
            'wtext', 'winput', 'keysdown']
 
-__p = platform.python_version()
-_ispython3 = (__p[0] == '3')
 
-if _ispython3:
-    from inspect import signature # Python 3; needed to allow zero arguments in a bound function
-else:
-    from inspect import getargspec # Python 2; needed to allow zero arguments in a bound function
+from inspect import signature # Python 3; needed to allow zero arguments in a bound function
 
 # __version__ is the version number of the Jupyter VPython installer, generated in building the installer.
 version = [__version__, 'jupyter']
@@ -97,22 +103,23 @@ __attrsb = {'userzoom':'a', 'userspin':'b', 'range':'c', 'autoscale':'d', 'fov':
           'right':'q', 'top':'r', 'bottom':'s', '_cloneid':'t',
           'logx':'u', 'logy':'v', 'dot':'w', 'dot_radius':'x',
           'markers':'y', 'legend':'z', 'label':'A', 'delta':'B', 'marker_color':'C',
-          'size_units':'D', 'userpan':'E', 'scroll':'F', 'choices':'G', 'depth':'H', 'round':'I'}
+          'size_units':'D', 'userpan':'E', 'scroll':'F', 'choices':'G', 'depth':'H',
+          'round':'I', 'name':'J', 'offset':'K', 'attach_idx':'L'}
 
 # methods are X in {'m': '23X....'}
 # pos is normally updated as an attribute, but for interval-based trails, it is updated (multiply) as a method
-__methods = {'select':'a', 'pos':'b', 'start':'c', 'stop':'d', 'clear':'f', # unused eghijklmnopvxyzCDFAB
+__methods = {'select':'a', 'pos':'b', 'start':'c', 'stop':'d', 'clear':'f', # unused eghijklmnopvxyzCDFABu
              'plot':'q', 'add_to_trail':'s',
-             'follow':'t', '_attach_arrow':'u', 'clear_trail':'w',
+             'follow':'t', 'clear_trail':'w',
              'bind':'G', 'unbind':'H', 'waitfor':'I', 'pause':'J', 'pick':'K', 'GSprint':'L',
              'delete':'M', 'capture':'N'}
 
-__vecattrs = ['pos', 'up', 'color', 'trail_color', 'axis', 'size', 'origin', '_attach_arrow',
+__vecattrs = ['pos', 'up', 'color', 'trail_color', 'axis', 'size', 'origin', 
             'direction', 'linecolor', 'bumpaxis', 'dot_color', 'ambient', 'add_to_trail',
             'foreground', 'background', 'ray', 'ambient', 'center', 'forward', 'normal',
-            'marker_color']
+            'marker_color', 'offset']
 
-__textattrs = ['text', 'align', 'caption', 'title', 'xtitle', 'ytitle', 'selected', 'label', 'capture',
+__textattrs = ['text', 'align', 'caption', 'title', 'xtitle', 'ytitle', 'selected', 'label', 'capture', 'name',
                  'append_to_caption', 'append_to_title', 'bind', 'unbind', 'pause', 'GSprint', 'choices']
 
 def _encode_attr2(sendval, val, ismethods):
@@ -192,7 +199,8 @@ class baseObj(object):
     updates = {'cmds':[], 'methods':[], 'attrs':{}}
     object_registry = {}    ## idx -> instance
     attach_arrows = []
-    attach_trails = []  ## needed only for functions
+    attach_trails = []  # needed only for functions
+    follow_objects = [] # entries are [invisible object to follow, function to call for pos, prevous pos]
     attrs = set()  # each element is (idx, attr name)
 
     @classmethod
@@ -207,16 +215,21 @@ class baseObj(object):
 
     @classmethod
     def handle_attach(cls): # called when about to send data to the browser
+
         ## update every attach_arrow if relevant vector has changed
         for aa in cls.attach_arrows:
-            obj = baseObj.object_registry[aa._obj]
+            if not aa._run: continue
+            obj = baseObj.object_registry[aa._object]
+            if not hasattr(obj, aa.attr): # no longer an attribute of the object
+                continue
             vval = getattr(obj, aa.attr) # could be 'velocity', for example
             if not isinstance(vval, vector):
-                raise AttributeError("attach_arrow value must be a vector.")
-            if (isinstance(aa._last_val, vector) and aa._last_val.equals(vval)):
-                continue
-            aa.addmethod('_attach_arrow', vval.value)
-            aa._last_val = vector(vval) # keep copy of last vector
+                raise AttributeError('attach_arrow attribute "'+aa.attr+'" value must be a vector.')
+            if aa._last_pos.equals(obj._pos) and aa._last_val.equals(vval): continue
+            aa._last_val = vector(vval)      # keep copies of last vectors
+            aa._last_pos = vector(obj._pos)
+            aa.pos = obj._pos
+            aa.axis = aa._scale*vval
 
         ## update every attach_trail that depends on a function
         for aa in cls.attach_trails:
@@ -230,6 +243,15 @@ class baseObj(object):
             if ( isinstance(aa._last_val, vector) and aa._last_val.equals(fval) ):
                 continue
             aa._last_val = fval
+
+        ## update every scene.camera.follow(function)
+        for aa in cls.follow_objects:
+            obj = aa[0]
+            val = aa[1]()
+            lastpos = aa[2]
+            if val != lastpos:
+                aa[2] = val 
+                obj.pos = val
 
     def __init__(self, **kwargs):
         if not (baseObj._view_constructed or
@@ -378,19 +400,18 @@ class GlowWidget(object):
                 elif evt['widget'] == 'checkbox':
                     obj._checked = evt['value']
                 elif evt['widget'] == 'radio':
-                    obj._checked = evt['value']
+                    obj.checked = evt['value']
                 elif evt['widget'] == 'winput':
                     obj._text = evt['text']
                     obj._number = evt['value']
+
                 # inspect the bound function and see what it's expecting
-                if _ispython3: # Python 3
-                    a = signature(obj._bind)
-                    if str(a) != '()': obj._bind( obj )
-                    else: obj._bind()
-                else: # Python 2
-                    a = getargspec(obj._bind)
-                    if len(a.args) > 0: obj._bind( obj )
-                    else: obj._bind()
+                a = signature(obj._bind)
+                if str(a) != '()':
+                    obj._bind( obj )
+                else:
+                    obj._bind()
+
             else:   ## a canvas event
                 if 'trigger' not in evt:
                     cvs = baseObj.object_registry[evt['canvas']]
@@ -519,9 +540,9 @@ class standardAttributes(baseObj):
                          ['visible', 'xoffset', 'yoffset', 'font', 'height', 'opacity',
                            'border', 'line', 'box', 'space', 'align', 'linewidth', 'pixel_pos'],
                          ['text']],
-                 'local_light':[['pos', 'color'],
+                 'local_light':[['pos', 'color', 'offset'],
                          [],
-                         ['visible'],
+                         ['visible', 'attach_idx'],
                          []],
                  'distant_light':[['direction', 'color'],
                          [],
@@ -545,10 +566,6 @@ class standardAttributes(baseObj):
                         [],
                         ['texture', 'bumpmap', 'visible', 'pickable'],
                         ['v0', 'v1', 'v2', 'v3'] ],
-                 'attach_arrow': [ [ 'color', 'attrval'],
-                        [],
-                        ['shaftwidth', 'round', 'scale', 'obj', 'attr'],
-                        [] ],
                  'attach_trail': [ ['color'],
                         [],
                         ['radius', 'pps', 'retain', 'type', '_obj'],
@@ -557,7 +574,8 @@ class standardAttributes(baseObj):
                          [],
                          ['location', 'text'],
                          []],
-                 'extrusion':[ ['pos', 'color', 'start_face_color', 'end_face_color', 'start_normal', 'end_normal'],
+                 'extrusion':[ ['pos', 'color', 'start_face_color', 'end_face_color',
+                        'start_normal', 'end_normal'],
                         [ 'axis', 'size', 'up' ],
                         ['path', 'shape', 'visible', 'opacity','shininess', 'emissive',
                          'show_start_face', 'show_end_face', 'smooth', 'smooth_joints', 'sharp_joints',
@@ -616,6 +634,8 @@ class standardAttributes(baseObj):
         self._size_units = 'pixels'
         self._texture = None
         self._pickable = True
+        self._offset = vector(0,0,0)
+        self._attach_idx = None
         self._save_oldaxis = None # used in linking axis and up
         self._save_oldup = None # used in linking axis and up
         _special_clone = None
@@ -721,14 +741,14 @@ class standardAttributes(baseObj):
 
     # attribute vectors have these methods which call self.addattr()
     # The vector class calls a change function when there's a change in x, y, or z.
-        noSize = ['points', 'label', 'vertex', 'triangle', 'quad', 'attach_arrow', 'attach_trail']
+        noSize = ['points', 'label', 'vertex', 'triangle', 'quad', 'attach_trail']
         if not (objName == 'extrusion'): # 
             self._color.on_change = self._on_color_change
         if objName not in noSize:
             self._axis.on_change = self._on_axis_change
             self._size.on_change = self._on_size_change
             self._up.on_change = self._on_up_change
-        noPos = ['curve', 'points', 'triangle', 'quad', 'attach_arrow']
+        noPos = ['curve', 'points', 'triangle', 'quad']
         if objName not in noPos:
             self._pos.on_change = self._on_pos_change
         elif objName == 'curve':
@@ -808,8 +828,13 @@ class standardAttributes(baseObj):
             if self._save_oldaxis is not None:
                 self._axis = self._save_oldaxis
                 self._save_oldaxis = None
-            if self._size._x == 0: self.axis = vector(value, 0, 0)
-            else: self.axis = value*self._axis.norm() # this will set length
+            if self._size._x == 0:
+                self.axis = vector(value, 0, 0)
+            else:
+                if self._sizing:
+                    self.axis = value*self._axis.norm() # this will set length if self._sizing
+                else:
+                    self._size._x = value # for objects whose axis and size are not linked
         if not self._constructing:
             self.addattr('axis')
             self.addattr('size')
@@ -1330,30 +1355,12 @@ class arrow(standardAttributes):
         if not self._constructing:
             self.addattr('headlength')
 
-class attach_arrow(standardAttributes):
-    def __init__(self, obj, attr, **args):
-        attrs = ['pos', 'size', 'axis', 'up', 'color']
-        args['_default_size'] = None
-        a = getattr(obj, attr) # This raises an error if obj does not have attr
-        if not isinstance(a, vector): raise AttributeError('The attach_arrow attribute "'+attr+ '" is not a vector.')        
-        self.obj = args['obj'] = obj.idx
-        self.attr = args['attr'] = attr # could be for example "velocity"
-        self.attrval = args['attrval'] = getattr(baseObj.object_registry[self.obj], attr)
-        args['_objName'] = "attach_arrow"
-        self._last_val = None
-        self._scale = 1
-        self._shaftwidth = 0
-        self._round = False
-        super(attach_arrow, self).setup(args)
-        # Only if the attribute is a user attribute do we need to add to attach_arrows:
-        if attr not in attrs: baseObj.attach_arrows.append(self)
-
     @property
     def round(self):
         return self._round
     @round.setter
     def round(self,value):
-        raise AttributeError('Cannot change the "round" attribute of an attach_arrow.')
+        raise AttributeError('Cannot change the "round" attribute of an arrow.')
 
     @property
     def scale(self):
@@ -1374,10 +1381,51 @@ class attach_arrow(standardAttributes):
             self.addattr("shaftwidth")
 
     def stop(self):
-        self.addmethod('stop', 'None')
+        self._run = self.visible = False
 
     def start(self):
-        self.addmethod('start', 'None')
+        self._run = self.visible = True
+    
+def attach_arrow(o, attr, **args): # factory function returns arrow with special attributes
+    '''
+    The object "o" with a vector attribute "p" will have an arrow attached with options such as "color".
+    The length of the arrow will be args.scale*o.p", updated with every render of the scene.
+    If one creates a new attachment with "arr = attach_arrow(obj, attr, options)" you
+    can later change (for example) its color with "arr.color = ..."
+    '''
+    if not hasattr(o, attr): raise AttributeError('Cannot attach an arrow to an object that has no "'+attr+'" attribute.')
+    if not isinstance(getattr(o, attr), vector): raise AttributeError('The attach_arrow attribute "'+attr+ '" is not a vector.')
+    if not isinstance(o.pos, vector): raise AttributeError("The object's pos attribute is not a vector.")
+    
+    scale = 1
+    if 'scale' in args: scale = args['scale']
+    shaftwidth = 0.5*o._size.y
+    if 'shaftwidth' in args: shaftwidth = args['shaftwidth']
+    c = o.color
+    if 'color' in args: c = args['color']
+    # Set _last_val to strange values so that the first update to WebGL won't match:
+    a = arrow(canvas=o.canvas, pickable=False, _object=o.idx, attr=attr, color=c,
+              scale=scale, shaftwidth=shaftwidth, _run=True,
+              _last_val=vector(134.472, 789.472, 465.472), _last_pos=vector(134.472, 789.472, 465.472))
+    baseObj.attach_arrows.append(a)
+    return a
+    
+def attach_light(o, **args): # factory function returns local_light with special attributes
+    '''
+    The object "o" will have a local_light attached with options "offset" and "color".
+    The local_light will constantly be positioned at o.pos plus the offset.
+    '''
+    if not isinstance(o.pos, vector): raise AttributeError("Cannot attach a light to an object that has no pos attribute.")
+    if 'color' in args:
+        if not isinstance(args['color'], vector): raise AttributeError("The color attribute must be a vector.")
+    else:
+        args['color'] = o.color # default color
+    if 'offset' in args:
+        if not isinstance(args['offset'], vector): raise AttributeError('The attach_light attribute "offset" must be a vector.')
+    else:
+        args['offset'] = vector(0,0,0) # default offset
+    a = local_light(pos=o.pos+args['offset'], attach_idx=o.idx, color=args['color'], offset=args['offset'])
+    return a
 
 class attach_trail(standardAttributes):
     def __init__(self, obj, **args):
@@ -1515,7 +1563,7 @@ class compound(standardAttributes):
         self.compound_idx += 1
         args['_objName'] = 'compound'+str(self.compound_idx)
         super(compound, self).setup(args)
-        self._sizing = False # no axis/size connection
+        self._sizing = False # no axis/size connection except that changing axis.mag changes compound length
 
         for obj in objList:
             # GlowScript will make the objects invisible, so need not set obj.visible
@@ -1587,7 +1635,7 @@ class vertex(standardAttributes):
             cv = args['canvas']
         else:
             cv = canvas.get_selected()
-        if cv.vertexCount > canvas.maxVertices-1:
+        if cv.vertexCount >= canvas.maxVertices:
             raise ValueError('too many vertex objects in use for this canvas')
         args['_default_size'] = None
         args['_objName'] = "vertex"
@@ -2048,6 +2096,8 @@ class gobj(baseObj):
         self._label = ''
         self._legend = False
         self._interval = -1
+        self._iterations = 0
+        self._firstplot = True
         self._graph = None
         self._data = []
         self._visible = True
@@ -2090,6 +2140,7 @@ class gobj(baseObj):
         cmd = {"cmd": objName, "idx": self.idx}
 
         for a in argsToSend:
+            if a == 'interval': continue # do not send to browser; handle here instead
             aval = getattr(self,a)
             if isinstance(aval, vector):
                 aval = aval.value
@@ -2161,7 +2212,7 @@ class gobj(baseObj):
     @interval.setter
     def interval(self,val):
         self._interval = val
-        self.addattr('interval')
+        self._iterations = 0
 
     def __del__(self):
         cmd = {"cmd": "delete", "idx": self.idx}
@@ -2203,15 +2254,26 @@ class gobj(baseObj):
             raise AttributeError("Must be plot(x,y) or plot(pos=[x,y]) or plot([x,y]) or plot([x,y], ...) or plot([ [x,y], ... ])")
 
     def plot(self, *args1, **args2):
+        if self._interval == 0:
+            return
+        if self._interval > 0:
+            self._iterations += 1
+            if self._firstplot:
+                self._firstplot = False
+            elif self._iterations < self._interval:
+                return
+            self._iterations = 0
         if len(args1) > 0:
             p = self.preresolve1(args1)
         else:
             p = self.preresolve2(args2)
         self._data = self._data + p
         self.addmethod('plot', p)
-
+        
     def delete(self):
         self.addmethod('delete', 'None')
+        self._firstplot = True
+        self._iterations = 0
 
     @property
     def label(self): return self._label
@@ -2428,7 +2490,7 @@ class graph(baseObj):
     @foreground.setter
     def foreground(self,val):
         if not isinstance(val, vector): raise TypeError('foreground must be a vector')
-        self._foreground = vector(value)
+        self._foreground = vector(val)
         self.addattr('foreground')
 
     @property
@@ -2436,7 +2498,7 @@ class graph(baseObj):
     @background.setter
     def background(self,val):
         if not isinstance(val,vector): raise TypeError('background must be a vector')
-        self._background = vector(value)
+        self._background = vector(val)
         self.addattr('background')
 
     @property
@@ -2744,7 +2806,6 @@ class Mouse(baseObj):
 class Camera(object):
     def __init__(self, canvas):
         self._canvas = canvas
-        self._followthis = None
         self._pos = None
 
     @property
@@ -2807,7 +2868,7 @@ class meta_canvas(object):
 class canvas(baseObj):
     selected = None
     hasmouse = None
-    maxVertices = 65535  ## 2^16 - 1  due to GS weirdness
+    maxVertices = 4.2e9  ## 2^32
 
     def __init__(self, **args):
         baseObj._canvas_constructing = True
@@ -2907,8 +2968,15 @@ class canvas(baseObj):
         distant_light(direction=vector(-0.88, -0.22, -0.44), color=color.gray(0.3))
         baseObj._canvas_constructing = False
 
-    def follow(self, obj):    ## should allow a function also
-        self.addmethod('follow', obj.idx)
+    def follow(self, obj):
+        if obj is None:
+            self.addmethod('follow', 'None')
+        elif callable(obj):
+            b = box(visible=False)
+            baseObj.follow_objects.append([b, obj, vector(1.2e15,3.4e14,-5.6e13)])
+            self.addmethod('follow', b.idx)
+        else:
+            self.addmethod('follow', obj.idx)
 
     def select(self):
         canvas.selected = self
@@ -3205,14 +3273,12 @@ class canvas(baseObj):
                 del evt['height']
                 for fct in self._binds['resize']:
                     # inspect the bound function and see what it's expecting
-                    if _ispython3: # Python 3
-                        a = signature(fct)
-                        if str(a) != '()': fct( evt )
-                        else: fct()
-                    else: # Python 2
-                        a = getargspec(fct)
-                        if len(a.args) > 0: fct( evt )
-                        else: fct()
+                    a = signature(fct)
+                    if str(a) != '()':
+                        fct(evt)
+                    else:
+                        fct()
+
         else: # pause/waitfor, update_canvas
             if 'pos' in evt:
                 pos = evt['pos']
@@ -3232,14 +3298,12 @@ class canvas(baseObj):
                 evt1 = event_return(evt)  ## turn it into an object
                 for fct in self._binds[ev]:
                     # inspect the bound function and see what it's expecting
-                    if _ispython3: # Python 3
-                        a = signature(fct)
-                        if str(a) != '()': fct( evt1 )
-                        else: fct()
-                    else: # Python 2
-                        a = getargspec(fct)
-                        if len(a.args) > 0: fct( evt1 )
-                        else: fct()
+                    a = signature(fct)
+                    if str(a) != '()':
+                        fct( evt1 )
+                    else:
+                        fct()
+
                 self._waitfor = evt1 # what pause and waitfor are looking for
             else:  ## user can change forward (spin), range/autoscale (zoom), up (touch), center (pan)
                 if 'forward' in evt and self.userspin and not self._set_forward:
@@ -3338,6 +3402,24 @@ class local_light(standardAttributes):
         if (canvas.get_selected() is not None):
             canvas.get_selected()._lights.append(self)
 
+    @property
+    def offset(self):
+        return self._offset
+    @offset.setter
+    def offset(self, value):
+        self._offset = vector(value)
+        if not self._constructing:
+            self.addattr('offset')
+
+    @property
+    def attach_idx(self):
+        return self._attach_idx
+    @attach_idx.setter
+    def attach_idx(self, value):
+        self._attach_idx = vector(value)
+        if not self._constructing:
+            self.addattr('attach_idx')
+
 class distant_light(standardAttributes):
     def __init__(self, **args):
         args['_default_size'] = vector(1,1,1)
@@ -3393,7 +3475,7 @@ class wtext(standardAttributes):
 class controls(baseObj):
     attrlists = { 'button': ['text', 'color', 'textcolor', 'background', 'disabled'],
                   'checkbox':['checked', 'text', 'disabled'],
-                  'radio':['checked', 'text', 'disabled'],
+                  'radio':['checked', 'text', 'disabled', 'name'],
                   'menu':['selected', 'choices', 'index', 'disabled'],
                   'slider':['vertical', 'min', 'max', 'step', 'value', 'length',
                             'width', 'left', 'right', 'top', 'bottom', 'align', 'disabled'],
@@ -3404,13 +3486,13 @@ class controls(baseObj):
         ## default values of common attributes
         self._constructing = True
         argsToSend = []
-        objName = args['_objName']
+        self.objName = args['_objName']
         del args['_objName']
         if 'pos' in args:
             self.location = args['pos']
             if self.location == print_anchor:
                 #self.location = [-1, print_anchor]
-                raise AttributeError(objName+': Cannot specify "print_anchor" in VPython 7.')
+                raise AttributeError(self.objName+': Cannot specify "print_anchor" in VPython 7.')
             argsToSend.append('location')
             del args['pos']
         if 'canvas' in args:  ## specified in constructor
@@ -3438,12 +3520,12 @@ class controls(baseObj):
 
         ## override default scalar attributes
         for a,val in args.items():
-            if a in controls.attrlists[objName]:
+            if a in controls.attrlists[self.objName]:
                 argsToSend.append(a)
                 setattr(self, '_'+a, val)
             else:
                 setattr(self, a, val)
-        cmd = {"cmd": objName, "idx": self.idx}
+        cmd = {"cmd": self.objName, "idx": self.idx}
         cmd["canvas"] = self.canvas.idx
 
         ## send only args specified in constructor
@@ -3465,10 +3547,10 @@ class controls(baseObj):
 
     @property
     def pos(self):
-        raise AttributeError(objName+' pos attribute is not available.')
+        raise AttributeError(self.objName+' pos attribute is not available.')
     @pos.setter
     def pos(self, value):
-        raise AttributeError(objName+' pos attribute cannot be changed.')
+        raise AttributeError(self.objName+' pos attribute cannot be changed.')
 
     @property
     def disabled(self):
@@ -3535,6 +3617,7 @@ class checkbox(controls):
         args['_objName'] = 'checkbox'
         self._checked = False
         self._text = ''
+        self._name = ''
         super(checkbox, self).setup(args)
 
     @property
@@ -3555,12 +3638,22 @@ class checkbox(controls):
         if not self._constructing:
             self.addattr('checked')
 
+_radio_groups = {} # radio buttons grouped by name
+
 class radio(controls):
     def __init__(self, **args):
         args['_objName'] = 'radio'
         self._checked = False
         self._text = ''
+        self._name = ''
         super(radio, self).setup(args)
+        if type(self._name) != str:
+            raise AttributeError("A radio group name must be a string.")
+        if self._name != '':
+            if self._name in _radio_groups:
+                _radio_groups[self._name].append(self)
+            else:
+                _radio_groups[self._name] = [self]
 
     @property
     def text(self):
@@ -3576,9 +3669,21 @@ class radio(controls):
         return self._checked
     @checked.setter
     def checked(self, value):
+        if self._checked == value: return
+        if len(self._name) > 0:
+            for r in _radio_groups[self.name]:
+                r._checked = False
         self._checked = value
         if not self._constructing:
             self.addattr('checked')
+
+    @property
+    def name(self):
+        return self._name
+    @name.setter
+    def name(self, value):
+        if not self._constructing:
+            raise AttributeError('Cannot change the name attribute of a radio widget.')
 
 class winput(controls):
     def __init__(self, **args):
